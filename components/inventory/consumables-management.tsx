@@ -769,7 +769,7 @@ export function ConsumablesManagement({ userRole }: ConsumablesManagementProps) 
                     <SelectContent>
                       {suppliers.map((supplier) => (
                         <SelectItem key={supplier.id} value={supplier.id.toString()}>
-                          {supplier.supplier_name}
+                          {supplier.name || supplier.supplier_name}
                         </SelectItem>
                       ))}
                     </SelectContent>

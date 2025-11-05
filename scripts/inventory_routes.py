@@ -172,19 +172,7 @@ def get_asset(asset_id):
             db_conn.close()
             return jsonify({'success': False, 'error': 'Asset not found'}), 404
         
-        # Get usage history
-        cursor.execute(
-            """
-            SELECT * FROM asset_usage_history
-            WHERE asset_id = %s
-            ORDER BY usage_date DESC
-            LIMIT 10
-            """,
-            (asset_id,)
-        )
-        
-        usage_history = cursor.fetchall()
-        asset['usage_history'] = usage_history
+        # Usage history removed: asset_usage_history table does not exist
         
         cursor.close()
         db_conn.close()
@@ -202,22 +190,19 @@ def update_asset_status(asset_id):
     """
     try:
         data = request.get_json()
-        
         if not data or 'status' not in data:
             return jsonify({'success': False, 'error': 'status is required'}), 400
-        
-        valid_statuses = ['operational', 'maintenance', 'retired', 'lost', 'damaged']
+
+        valid_statuses = ['operational', 'maintenance', 'retired', 'faulty']
         new_status = data.get('status')
-        
         if new_status not in valid_statuses:
             return jsonify({
                 'success': False,
                 'error': f'Invalid status. Must be one of: {", ".join(valid_statuses)}'
             }), 400
-        
+
         db_conn = get_db_connection()
         cursor = db_conn.cursor()
-        
         cursor.execute(
             """
             UPDATE assets
@@ -226,30 +211,18 @@ def update_asset_status(asset_id):
             """,
             (new_status, datetime.now(timezone.utc), asset_id)
         )
-        
         if cursor.rowcount == 0:
             cursor.close()
             db_conn.close()
             return jsonify({'success': False, 'error': 'Asset not found'}), 404
-        
-        # Log usage
-        cursor.execute(
-            """
-            INSERT INTO asset_usage_history (asset_id, usage_date, status_change, notes)
-            VALUES (%s, %s, %s, %s)
-            """,
-            (asset_id, datetime.now(timezone.utc), new_status, data.get('notes', ''))
-        )
-        
+
         db_conn.commit()
         cursor.close()
         db_conn.close()
-        
         return jsonify({
             'success': True,
             'message': f'Asset status updated to {new_status}'
         }), 200
-    
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -288,9 +261,18 @@ def get_consumables():
         )
         
         consumables = cursor.fetchall()
+        # Add stock_status to each consumable
+        for c in consumables:
+            qty = c.get('total_quantity') or c.get('quantity_current') or c.get('total_in_stock') or 0
+            reorder_level = c.get('reorder_level', 10)
+            if qty <= 0:
+                c['stock_status'] = 'out_of_stock'
+            elif qty <= reorder_level:
+                c['stock_status'] = 'low_stock'
+            else:
+                c['stock_status'] = 'in_stock'
         cursor.close()
         db_conn.close()
-        
         return jsonify({
             'success': True,
             'data': consumables,
@@ -859,12 +841,13 @@ def receive_stock():
 # ASSET MAINTENANCE
 # ============================================================================
 
-@inventory_bp.route('/assets/<int:asset_id>/maintenance', methods=['GET', 'POST'])
+@inventory_bp.route('/assets/<int:asset_id>/maintenance', methods=['GET', 'POST', 'PUT'])
 @require_auth
 def asset_maintenance(asset_id):
     """
     GET: List all maintenance records for an asset
     POST: Create a new maintenance record for an asset
+    PUT: Update an existing maintenance record (requires 'id' in payload)
     """
     db_conn = get_db_connection()
     cursor = db_conn.cursor(dictionary=True)
@@ -922,6 +905,41 @@ def asset_maintenance(asset_id):
             cursor.close()
             db_conn.close()
             return jsonify({'success': True, 'data': new_record, 'message': 'Maintenance record created'}), 201
+        except Exception as e:
+            cursor.close()
+            db_conn.close()
+            return jsonify({'success': False, 'error': str(e)}), 500
+    elif request.method == 'PUT':
+        try:
+            data = request.get_json()
+            if not data or 'id' not in data:
+                cursor.close()
+                db_conn.close()
+                return jsonify({'success': False, 'error': 'id is required for update'}), 400
+            update_fields = []
+            params = []
+            for field in ['maintenance_date', 'maintenance_type', 'description', 'cost', 'performed_by', 'next_due_date', 'notes']:
+                if field in data:
+                    update_fields.append(f"{field} = %s")
+                    params.append(data[field])
+            if not update_fields:
+                cursor.close()
+                db_conn.close()
+                return jsonify({'success': False, 'error': 'No fields to update'}), 400
+            params.append(data['id'])
+            params.append(asset_id)
+            cursor.execute(
+                f"""
+                UPDATE asset_maintenance SET {', '.join(update_fields)} WHERE id = %s AND asset_id = %s
+                """,
+                tuple(params)
+            )
+            db_conn.commit()
+            cursor.execute("SELECT * FROM asset_maintenance WHERE id = %s", (data['id'],))
+            updated_record = cursor.fetchone()
+            cursor.close()
+            db_conn.close()
+            return jsonify({'success': True, 'data': updated_record, 'message': 'Maintenance record updated'}), 200
         except Exception as e:
             cursor.close()
             db_conn.close()

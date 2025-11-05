@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
-import { Search, Plus, Edit, Wrench, AlertTriangle, CheckCircle, XCircle, Package, Loader2, Calendar } from "lucide-react"
+import { Search, Plus, Edit, Wrench, AlertTriangle, CheckCircle, XCircle, Package, Loader2, Calendar, Trash2 } from "lucide-react"
 import { apiService } from "@/lib/api-service"
 import { useToast } from "@/hooks/use-toast"
 
@@ -62,6 +62,13 @@ const assetStatuses = [
 export function AssetManagement({ userRole }: AssetManagementProps) {
   const [assets, setAssets] = useState<MedicalAsset[]>([])
   const [categories, setCategories] = useState<AssetCategory[]>([])
+  // Debug: log userRole and asset statuses on mount
+  useEffect(() => {
+    console.log('Current userRole:', userRole)
+    if (assets.length > 0) {
+      console.log('Asset statuses:', assets.map(a => ({ id: a.id, status: a.status, name: a.asset_name })))
+    }
+  }, [userRole, assets])
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [categoryFilter, setCategoryFilter] = useState<string>("all")
@@ -93,7 +100,26 @@ export function AssetManagement({ userRole }: AssetManagementProps) {
     last_maintenance_date: "",
     next_maintenance_date: "",
     maintenance_notes: "",
+    maintenance_type: "preventive" as "preventive" | "corrective" | "calibration",
   })
+
+  // Helper to normalize status strings from backend (case-insensitive and some variants)
+  const normalizeStatus = (raw: any): MedicalAsset['status'] => {
+    if (!raw && raw !== 0) return 'Operational'
+    const s = String(raw).trim().toLowerCase()
+    if (s === 'operational' || s === 'operational' ) return 'Operational'
+    if (s === 'maintenance required' || s === 'maintenance_required' || s === 'maintenance-required' || s === 'maintenancerequired') return 'Maintenance Required'
+    if (s === 'out of service' || s === 'out_of_service' || s === 'out-of-service' || s === 'outofservice') return 'Out of Service'
+    if (s === 'retired') return 'Retired'
+    // Fallback: capitalize first letter
+    const capitalized = s.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+    if (['Operational','Maintenance Required','Out Of Service','Retired'].includes(capitalized)) {
+      // Map 'Out Of Service' -> 'Out of Service'
+      if (capitalized === 'Out Of Service') return 'Out of Service'
+      return capitalized as MedicalAsset['status']
+    }
+    return 'Operational'
+  }
 
   // Fetch assets from API
   const fetchAssets = async () => {
@@ -101,7 +127,11 @@ export function AssetManagement({ userRole }: AssetManagementProps) {
       setLoading(true)
       const response = await apiService.getAssets()
       if (response.success && response.data) {
-        setAssets(response.data as MedicalAsset[])
+        // Normalize incoming statuses so UI comparisons work regardless of backend casing/variants
+        const incoming = (response.data as MedicalAsset[]) || []
+        const mapped = incoming.map((a) => ({ ...a, status: normalizeStatus((a as any).status) }))
+        console.debug('Fetched assets (normalized statuses):', mapped.map(m => ({ id: m.id, status: m.status })))
+        setAssets(mapped)
       }
     } catch (error) {
       toast({
@@ -302,6 +332,7 @@ export function AssetManagement({ userRole }: AssetManagementProps) {
       last_maintenance_date: asset.last_maintenance_date || "",
       next_maintenance_date: asset.next_maintenance_date || "",
       maintenance_notes: asset.maintenance_notes || "",
+      maintenance_type: "preventive",
     })
     setShowMaintenanceDialog(true)
   }
@@ -312,21 +343,15 @@ export function AssetManagement({ userRole }: AssetManagementProps) {
     try {
       setSubmitting(true)
 
-      const updatePayload: any = {}
-      
-      if (maintenanceForm.last_maintenance_date) {
-        updatePayload.last_maintenance_date = maintenanceForm.last_maintenance_date
-      }
-      
-      if (maintenanceForm.next_maintenance_date) {
-        updatePayload.next_maintenance_date = maintenanceForm.next_maintenance_date
-      }
-      
-      if (maintenanceForm.maintenance_notes) {
-        updatePayload.maintenance_notes = maintenanceForm.maintenance_notes
+      // Map form fields to backend asset_maintenance fields
+      const payload: any = {
+        maintenance_type: maintenanceForm.maintenance_type, // must be 'preventive', 'corrective', or 'calibration'
+        maintenance_date: maintenanceForm.last_maintenance_date || new Date().toISOString().slice(0, 10),
+        next_due_date: maintenanceForm.next_maintenance_date || null,
+        notes: maintenanceForm.maintenance_notes || null,
       }
 
-  const response = await apiService.updateAssetMaintenance(maintenanceAsset.id, updatePayload)
+      const response = await apiService.createAssetMaintenance(maintenanceAsset.id, payload)
 
       if (response.success) {
         toast({
@@ -339,6 +364,7 @@ export function AssetManagement({ userRole }: AssetManagementProps) {
           last_maintenance_date: "",
           next_maintenance_date: "",
           maintenance_notes: "",
+          maintenance_type: "preventive",
         })
         fetchAssets()
       } else {
@@ -621,6 +647,23 @@ export function AssetManagement({ userRole }: AssetManagementProps) {
               />
             </div>
 
+            <div className="space-y-2">
+              <Label>Maintenance Type</Label>
+              <Select
+                value={maintenanceForm.maintenance_type}
+                onValueChange={(val) => setMaintenanceForm({ ...maintenanceForm, maintenance_type: val as "preventive" | "corrective" | "calibration" })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="preventive">Preventive</SelectItem>
+                  <SelectItem value="corrective">Corrective</SelectItem>
+                  <SelectItem value="calibration">Calibration</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="flex gap-2">
               <Button onClick={scheduleMaintenance} disabled={submitting}>
                 {submitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
@@ -701,36 +744,52 @@ export function AssetManagement({ userRole }: AssetManagementProps) {
                         </div>
                       </div>
                     </div>
-                    {(userRole === "administrator" || userRole === "doctor" || userRole === "nurse" || userRole === "inventory_manager") && (
-                      <div className="flex gap-2 ml-4">
-                        <Button variant="outline" size="sm" onClick={() => setSelectedAsset(asset)}>
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        <Button 
-                          variant="outline" 
-                          size="sm" 
-                          onClick={() => openMaintenanceDialog(asset)}
-                          className="flex items-center gap-1"
+                    {/* Always render button group for debugging */}
+                    <div className="flex gap-2 ml-4">
+                      <Button variant="outline" size="sm" onClick={() => setSelectedAsset(asset)}>
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => openMaintenanceDialog(asset)}
+                        className="flex items-center gap-1"
+                      >
+                        <Calendar className="w-4 h-4" />
+                        <span className="hidden sm:inline">Schedule Maintenance</span>
+                      </Button>
+                      {/* Wrench button for status change to Maintenance Required */}
+                      {asset.status === "Operational" && (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => updateAssetStatus(asset.id, "Maintenance Required")}
+                          title="Mark as Maintenance Required"
                         >
-                          <Calendar className="w-4 h-4" />
-                          <span className="hidden sm:inline">Schedule Maintenance</span>
+                          <Wrench className="w-4 h-4" />
                         </Button>
-                        {asset.status === "Maintenance Required" && (
-                          <Button variant="outline" size="sm" onClick={() => updateAssetStatus(asset.id, "Operational")}> 
-                            <CheckCircle className="w-4 h-4" />
-                          </Button>
-                        )}
-                        {asset.status === "Operational" && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => updateAssetStatus(asset.id, "Maintenance Required")}
-                          >
-                            <Wrench className="w-4 h-4" />
-                          </Button>
-                        )}
-                      </div>
-                    )}
+                      )}
+                      {/* CheckCircle button for status change back to Operational */}
+                      {asset.status === "Maintenance Required" && (
+                        <Button variant="outline" size="sm" onClick={() => updateAssetStatus(asset.id, "Operational")}> 
+                          <CheckCircle className="w-4 h-4" />
+                        </Button>
+                      )}
+                      {/* Delete button with Trash2 icon */}
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => {
+                          if (window.confirm(`Are you sure you want to delete asset '${asset.asset_name}'?`)) {
+                            // Implement deleteAsset function or logic here
+                            toast({ title: "Delete not implemented", description: "Add deleteAsset logic.", variant: "destructive" })
+                          }
+                        }}
+                        title="Delete Asset"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
                   {asset.maintenance_notes && (
                     <div className="border-t pt-3">
