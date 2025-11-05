@@ -854,3 +854,75 @@ def receive_stock():
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+# ============================================================================
+# ASSET MAINTENANCE
+# ============================================================================
+
+@inventory_bp.route('/assets/<int:asset_id>/maintenance', methods=['GET', 'POST'])
+@require_auth
+def asset_maintenance(asset_id):
+    """
+    GET: List all maintenance records for an asset
+    POST: Create a new maintenance record for an asset
+    """
+    db_conn = get_db_connection()
+    cursor = db_conn.cursor(dictionary=True)
+    if request.method == 'GET':
+        try:
+            cursor.execute(
+                """
+                SELECT * FROM asset_maintenance
+                WHERE asset_id = %s
+                ORDER BY maintenance_date DESC, created_at DESC
+                """,
+                (asset_id,)
+            )
+            records = cursor.fetchall()
+            cursor.close()
+            db_conn.close()
+            return jsonify({'success': True, 'data': records}), 200
+        except Exception as e:
+            cursor.close()
+            db_conn.close()
+            return jsonify({'success': False, 'error': str(e)}), 500
+    elif request.method == 'POST':
+        try:
+            data = request.get_json()
+            required_fields = ['maintenance_type', 'maintenance_date']
+            for field in required_fields:
+                if not data.get(field):
+                    cursor.close()
+                    db_conn.close()
+                    return jsonify({'success': False, 'error': f'{field} is required'}), 400
+
+            cursor.execute(
+                """
+                INSERT INTO asset_maintenance (
+                    asset_id, maintenance_date, maintenance_type, description, cost, performed_by, next_due_date, notes, created_by, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    asset_id,
+                    data['maintenance_date'],
+                    data['maintenance_type'],
+                    data.get('description'),
+                    data.get('cost'),
+                    data.get('performed_by'),
+                    data.get('next_due_date'),
+                    data.get('notes'),
+                    getattr(request, 'user_id', None),
+                    datetime.now(timezone.utc)
+                )
+            )
+            db_conn.commit()
+            new_id = cursor.lastrowid
+            cursor.execute("SELECT * FROM asset_maintenance WHERE id = %s", (new_id,))
+            new_record = cursor.fetchone()
+            cursor.close()
+            db_conn.close()
+            return jsonify({'success': True, 'data': new_record, 'message': 'Maintenance record created'}), 201
+        except Exception as e:
+            cursor.close()
+            db_conn.close()
+            return jsonify({'success': False, 'error': str(e)}), 500

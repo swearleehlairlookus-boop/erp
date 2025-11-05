@@ -1,3 +1,16 @@
+// --- Asset Maintenance Types ---
+export interface AssetMaintenance {
+  id: number;
+  asset_id: number;
+  maintenance_type: string;
+  description?: string;
+  performed_by?: string;
+  performed_at?: string;
+  next_due?: string;
+  cost?: number;
+  created_at?: string;
+  updated_at?: string;
+}
 
 
 // --- API Response Wrapper ---
@@ -111,6 +124,24 @@ export interface InventoryUsageRequest {
 const DEFAULT_API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
 class ApiService {
+  // ==================== ASSET MAINTENANCE ====================
+  async getAssetMaintenance(assetId: number): Promise<ApiResponse<AssetMaintenance[]>> {
+    return this.request<AssetMaintenance[]>(`/inventory/assets/${assetId}/maintenance`)
+  }
+
+  async createAssetMaintenance(assetId: number, data: {
+    maintenance_type: string;
+    description?: string;
+    performed_by?: string;
+    performed_at?: string;
+    next_due?: string;
+    cost?: number;
+  }): Promise<ApiResponse<AssetMaintenance>> {
+    return this.request<AssetMaintenance>(`/inventory/assets/${assetId}/maintenance`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
   async updateAssetMaintenance(id: number, maintenance: { last_maintenance_date?: string; next_maintenance_date?: string; maintenance_notes?: string }): Promise<ApiResponse<any>> {
     return this.request<any>(`/inventory/assets/${id}/maintenance`, {
       method: "PUT",
